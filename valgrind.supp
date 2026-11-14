@@ -1,4 +1,4 @@
-# Valgrind suppressions for modsecurity-rs.
+# Valgrind suppressions for libmodsecurity3-rs.
 #
 # Keep this file minimal: every entry here is a memory report the test suite
 # will no longer show you. Each one records what was investigated and why it is

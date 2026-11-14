@@ -1,0 +1,60 @@
+name: Set up the build
+description: >-
+  Installs libmodsecurity and its headers, the OWASP Core Rule Set, and a Rust
+  toolchain. Everything here comes from the distribution or from rustup, which
+  is preinstalled on GitHub's runners, so the pipeline pulls in no third-party
+  actions.
+
+inputs:
+  toolchain:
+    description: Rust toolchain to install and make the default.
+    required: false
+    default: stable
+  components:
+    description: Space-separated rustup components, e.g. "rustfmt clippy".
+    required: false
+    default: ""
+  valgrind:
+    description: >-
+      Install Valgrind and libclang as well. Both are needed by the `valgrind`
+      feature: Memcheck to run under, and libclang for the bindgen build of
+      crabgrind.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Install libmodsecurity and the OWASP CRS
+      shell: bash
+      env:
+        WANT_VALGRIND: ${{ inputs.valgrind }}
+      run: |
+        set -euo pipefail
+        packages=(libmodsecurity-dev modsecurity-crs)
+        if [[ "$WANT_VALGRIND" == "true" ]]; then
+          packages+=(valgrind libclang-dev)
+        fi
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends "${packages[@]}"
+        # Fail here, loudly and early, rather than letting tests/crs.rs decide
+        # it has nothing to test. MODSEC_REQUIRE_CRS makes that a failure too,
+        # but this says plainly which path is missing.
+        test -f /etc/modsecurity/crs/crs-setup.conf
+        test -f /usr/share/modsecurity-crs/rules/REQUEST-949-BLOCKING-EVALUATION.conf
+
+    - name: Install Rust ${{ inputs.toolchain }}
+      shell: bash
+      env:
+        TOOLCHAIN: ${{ inputs.toolchain }}
+        COMPONENTS: ${{ inputs.components }}
+      run: |
+        set -euo pipefail
+        args=()
+        for component in $COMPONENTS; do
+          args+=(--component "$component")
+        done
+        rustup toolchain install "$TOOLCHAIN" --profile minimal "${args[@]}"
+        rustup default "$TOOLCHAIN"
+        rustc --version
+        cargo --version

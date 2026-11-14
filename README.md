@@ -1,4 +1,4 @@
-# modsecurity-rs
+# libmodsecurity3-rs
 
 Safe Rust bindings to [libmodsecurity v3][upstream] — the engine behind
 ModSecurity and the OWASP Core Rule Set.
@@ -142,16 +142,66 @@ everything.
 ## Testing
 
 ```sh
-cargo test                                          # 18 integration tests, no dependencies
+cargo test                                          # 30 tests, no dependencies
 cargo clippy --all-targets
 cargo test --release -- --ignored --nocapture       # resident-memory leak check
 scripts/valgrind-test.sh                            # the whole suite under Valgrind
 ```
 
-The suite covers the phase state machine, request and response body inspection,
-interventions (deny and redirect), per-handle log callbacks, binary header
-values, error reporting, panics in callbacks, and concurrent parsing and
-evaluation across threads.
+`tests/integration.rs` covers the phase state machine, request and response
+body inspection, interventions (deny and redirect), per-handle log callbacks,
+binary header values, error reporting, panics in callbacks, and concurrent
+parsing and evaluation across threads. `tests/crs.rs` then checks the whole
+thing against a real rule set.
+
+### Validating against the OWASP Core Rule Set
+
+Hand-written rules prove the FFI plumbing; they do not prove that a production
+rule set behaves correctly through it. `tests/crs.rs` loads the system CRS —
+`/etc/modsecurity/crs/crs-setup.conf` plus
+`/usr/share/modsecurity-crs/rules/*.conf`, as installed by Debian's and
+Ubuntu's `modsecurity-crs` package — and asserts on both verdicts:
+
+- **Blocked**, with status 403 from rule 949110, in phase 2: SQL injection in a
+  query argument and in a form body, reflected XSS, local and remote file
+  inclusion, OS command injection, PHP object injection, Shellshock in a
+  `User-Agent`, and the sqlmap/Nikto/nmap scanner agents.
+- **Blocked**, with status 403 from rule 959100, in phase 4: MySQL error text
+  and PHP source leaking into a response body.
+- **Allowed**: ordinary page, asset and paginated API requests, a form post and
+  a JSON post — the false-positive side, which a block-only test cannot show.
+- **Configuration still reaches the engine**: `SecRuleEngine DetectionOnly`
+  reports through the log callback and returns no intervention, and raising
+  `tx.inbound_anomaly_score_threshold` before the CRS loads lets the same
+  attack through. Both are negative controls: they fail if this crate were
+  blocking for some reason of its own.
+- **Concurrency**: eight threads sharing one `Rules`, and four threads each
+  parsing the full CRS at once.
+
+Both paths can be pointed elsewhere with `MODSEC_CRS_SETUP` and
+`MODSEC_CRS_RULES`. Where the CRS is not installed the tests report a skip and
+pass; setting `MODSEC_REQUIRE_CRS=1` turns that skip into a failure, so CI
+cannot pass them vacuously.
+
+Two things worth knowing if you are wiring the CRS into a connector:
+
+- **`owasp-crs.load` cannot be handed to the parser.** Debian's loader file
+  uses Apache's `IncludeOptional`, which libmodsecurity v3's SecLang parser
+  rejects outright. Include `crs-setup.conf` and the rules glob yourself.
+- **`Rules::add_file` does not glob.** It opens exactly the path given;
+  wildcards belong to the `Include` *directive*, so the glob goes in through
+  `add_plain("Include …/rules/*.conf\n")`.
+- **The CRS blocks in phase 2.** Rule 949110 evaluates the accumulated anomaly
+  score after the request body, so a connector that stops at
+  `process_request_headers` never sees the intervention — even for a request
+  already scored past the threshold. `tests/crs.rs` asserts this explicitly so
+  the behaviour is not mistaken for a bug.
+
+Finally, the host-server directives are yours to supply. Debian ships them in
+`modsecurity.conf-recommended`, which belongs to the Apache module, not to the
+CRS: without `SecRuleEngine On` the rule set detects and never blocks, and
+without `SecRequestBodyAccess On` phase 2 sees no body at all. `prelude()` in
+`tests/crs.rs` is a working starting point.
 
 ### Memory checking with Valgrind
 
@@ -195,16 +245,83 @@ report that they were skipped and pass. `scripts/valgrind-test.sh` sets
 `MODSEC_REQUIRE_VALGRIND=1`, which turns that skip into a failure so the entry
 point cannot pass vacuously.
 
-`valgrind.supp` holds the suppressions. There is exactly one: a `std::thread`
-handle the Rust test harness allocates for the main thread and parks in a
-thread-local Memcheck cannot follow. Nothing is suppressed for libmodsecurity —
-3.0.12 reports no definite or indirect leaks under this suite. The file carries
-a commented template if another platform needs one.
+`valgrind.supp` holds the suppressions applied to every binary. There is
+exactly one: a `std::thread` handle the Rust test harness allocates for the
+main thread and parks in a thread-local Memcheck cannot follow. Nothing is
+suppressed for libmodsecurity — 3.0.12 reports no definite or indirect leaks
+under this suite. The file carries a commented template if another platform
+needs one.
+
+`valgrind-pcre2-jit.supp` is applied to the CRS binary alone, by a one-line
+branch in `scripts/valgrind-runner.sh`. libmodsecurity links libpcre2-8, whose
+JIT scans subject strings with *unaligned* 16-byte vector loads: a load may
+start inside the string and run past its end — never across a page boundary, so
+it cannot fault — and the JIT then branches on the bytes beyond it before
+masking them off. Memcheck reports both steps, from two anonymous JIT frames
+with no symbols to anchor a suppression to. The entries can therefore only
+match on `Memcheck:Addr16` and `Memcheck:Cond` with unsymbolised frames, which
+is blunt enough that it would also hide a genuine 16-byte invalid read in this
+crate — hence the per-binary scoping, which leaves every other test binary
+checked at full strength. Upstream's fix is to build PCRE2 with
+`--enable-valgrind`; if your distribution does, delete the file and the branch.
+
+Under Memcheck the CRS tests shrink their thread and iteration counts — they
+detect Valgrind from its `LD_PRELOAD` — which keeps the full run near a minute
+instead of eight.
 
 [crabgrind]: https://github.com/2dav/crabgrind
 
+## Continuous integration and releasing
+
+`.github/workflows/ci.yml` runs three test jobs on every push to `main` and
+every pull request:
+
+| Job | What it does |
+| --- | --- |
+| **Test (stable)** | `cargo fmt --check`, clippy with and without `--all-features` (both `-D warnings`), `cargo test --all-targets`, the doc tests, and a `cargo doc` build with the flags docs.rs will use |
+| **Build (MSRV 1.85)** | `cargo check --all-targets` on the toolchain `rust-version` promises |
+| **Memcheck** | `scripts/valgrind-test.sh` — every test binary under Valgrind |
+
+System dependencies come from apt (`libmodsecurity-dev`, `modsecurity-crs`,
+and Valgrind plus `libclang-dev` for the Memcheck job) and the toolchain from
+the rustup already on the runner, so the pipeline uses no third-party actions.
+`MODSEC_REQUIRE_CRS=1` is set for the whole workflow and the setup step checks
+for the CRS files directly: a runner without the rule set fails the build
+rather than quietly skipping `tests/crs.rs`.
+
+### Cutting a release
+
+Releases are never automatic. Start the **CI** workflow by hand from the
+Actions tab and choose a level — `patch`, `minor`, `major`, `rc`, `beta` or
+`alpha`. The `release` job `needs` all three test jobs, so cargo-release runs
+only on a commit that has just gone green; leaving the level at `none` runs the
+tests and stops. Tick **dry_run** to have cargo-release print what it would do
+and change nothing.
+
+What a real run does is set out in `release.toml`: bump the version, commit,
+tag `v{version}`, push both, and publish to crates.io. Before the first one:
+
+- Add a **`CARGO_REGISTRY_TOKEN`** repository secret, or set `publish = false`
+  in `release.toml` to tag without publishing. Without it cargo-release fails
+  at the publish step, *after* the commit and tag have been made.
+- Give Actions write access to the repository (Settings → Actions → General →
+  Workflow permissions), since the job pushes a commit and a tag.
+- If `main` is protected, allow the `github-actions[bot]` push or the release
+  will be rejected at the last step.
+- `allow-branch = ["main"]` means a dispatch from any other branch is refused
+  up front, before anything is written.
+
+To require a human approval before publishing, add an `environment:` to the
+`release` job and configure required reviewers on it.
+
 ## License
 
-Apache-2.0, matching upstream ModSecurity.
+Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
+<https://www.apache.org/licenses/LICENSE-2.0>), matching upstream ModSecurity.
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in this crate by you, as defined in the Apache-2.0
+license, shall be licensed as above, without any additional terms or
+conditions.
 
 [upstream]: https://github.com/owasp-modsecurity/ModSecurity

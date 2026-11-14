@@ -7,7 +7,7 @@ use modsecurity::{Error, ModSecurity, Rules, Transaction};
 fn engine() -> ModSecurity {
     ModSecurity::new()
         .expect("msc_init")
-        .with_connector_info("modsecurity-rs-tests/0.1")
+        .with_connector_info("libmodsecurity3-rs-tests/0.1")
         .expect("connector info")
 }
 
@@ -185,7 +185,7 @@ fn rule_syntax_errors_are_reported() {
 fn missing_rule_file_is_reported() {
     let mut rules = Rules::new().unwrap();
     let err = rules
-        .add_file("/nonexistent/modsecurity-rs/rules.conf")
+        .add_file("/nonexistent/libmodsecurity3-rs/rules.conf")
         .unwrap_err();
     assert!(matches!(err, Error::Rules(_)), "got {err:?}");
 }

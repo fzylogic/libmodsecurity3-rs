@@ -17,12 +17,19 @@
 //! it was skipped and passes — unless `MODSEC_REQUIRE_VALGRIND` is set, which
 //! the script does, making a vacuous pass impossible.
 
+// The whole file is gated rather than the target carrying
+// `required-features`, which would leave editors unable to analyse it at all:
+// both RustRover and rust-analyzer skip a target whose required features are
+// off, and report it as a problem. An inactive `cfg` is ordinary greyed-out
+// code that lights up the moment the feature is enabled.
+#![cfg(feature = "valgrind")]
+
 use std::ffi::CString;
 use std::sync::{Mutex, MutexGuard};
 
-use crabgrind as cg;
 use cg::memcheck::{LeakCheck, LeaksCount};
 use cg::valgrind;
+use crabgrind as cg;
 
 use modsecurity::{Intervention, ModSecurity, Rules, Transaction};
 
@@ -103,7 +110,8 @@ const REDIRECT_RULES: &str = "SecRuleEngine On\n\
 /// sequence and the intervention string handling.
 fn disrupted_transaction(ms: &ModSecurity, rules: &Rules) -> Intervention {
     let mut tx = Transaction::new(ms, rules).unwrap();
-    tx.process_connection("203.0.113.9", 51234, "198.51.100.1", 443).unwrap();
+    tx.process_connection("203.0.113.9", 51234, "198.51.100.1", 443)
+        .unwrap();
     tx.process_uri("/page?a=1", "GET", "1.1").unwrap();
     tx.add_request_header(b"Host", b"example.com").unwrap();
     let action = tx.process_request_headers().unwrap().expect("redirect");
@@ -126,7 +134,7 @@ fn crabgrind_is_wired_up() {
     if !under_valgrind("crabgrind_is_wired_up") {
         return;
     }
-    annotate("modsecurity-rs: crabgrind_is_wired_up");
+    annotate("libmodsecurity3-rs: crabgrind_is_wired_up");
 
     assert!(valgrind::running_mode().is_valgrind());
 
@@ -155,7 +163,7 @@ fn transactions_do_not_leak() {
     if !under_valgrind("transactions_do_not_leak") {
         return;
     }
-    annotate("modsecurity-rs: transactions_do_not_leak");
+    annotate("libmodsecurity3-rs: transactions_do_not_leak");
 
     let ms = ModSecurity::new().unwrap();
     let mut rules = Rules::new().unwrap();
@@ -186,7 +194,7 @@ fn transaction_bodies_do_not_leak() {
     if !under_valgrind("transaction_bodies_do_not_leak") {
         return;
     }
-    annotate("modsecurity-rs: transaction_bodies_do_not_leak");
+    annotate("libmodsecurity3-rs: transaction_bodies_do_not_leak");
 
     let ms = ModSecurity::new().unwrap();
     let mut rules = Rules::new().unwrap();
@@ -206,12 +214,14 @@ fn transaction_bodies_do_not_leak() {
         for _ in 0..n {
             let mut tx = Transaction::new(&ms, &rules).unwrap();
             tx.process_uri("/upload", "POST", "1.1").unwrap();
-            tx.add_request_header(b"Content-Type", b"application/octet-stream").unwrap();
+            tx.add_request_header(b"Content-Type", b"application/octet-stream")
+                .unwrap();
             tx.process_request_headers().unwrap();
             tx.append_request_body(&body).unwrap();
             tx.append_request_body(b"needle").unwrap();
             tx.process_request_body().unwrap();
-            tx.add_response_header(b"Content-Type", b"text/plain").unwrap();
+            tx.add_response_header(b"Content-Type", b"text/plain")
+                .unwrap();
             tx.process_response_headers(200, "HTTP/1.1").unwrap();
             tx.append_response_body(&body).unwrap();
             tx.process_response_body().unwrap();
@@ -234,7 +244,7 @@ fn rule_sets_do_not_leak() {
     if !under_valgrind("rule_sets_do_not_leak") {
         return;
     }
-    annotate("modsecurity-rs: rule_sets_do_not_leak");
+    annotate("libmodsecurity3-rs: rule_sets_do_not_leak");
 
     // Builds, parses, merges and drops rule sets, including the failure path
     // that hands back a `strdup`ed parser diagnostic for the wrapper to free.
@@ -259,9 +269,13 @@ fn rule_sets_do_not_leak() {
             rules.merge(&extra).unwrap();
 
             // Error paths allocate a diagnostic that `Rules` must free.
-            let err = rules.add_plain("SecRule BOGUS \"@nope x\" \"id:1\"").unwrap_err();
+            let err = rules
+                .add_plain("SecRule BOGUS \"@nope x\" \"id:1\"")
+                .unwrap_err();
             assert!(!err.to_string().is_empty());
-            let err = rules.add_file("/nonexistent/modsecurity-rs.conf").unwrap_err();
+            let err = rules
+                .add_file("/nonexistent/libmodsecurity3-rs.conf")
+                .unwrap_err();
             assert!(!err.to_string().is_empty());
         }
     };
@@ -280,7 +294,7 @@ fn log_callbacks_do_not_leak() {
     if !under_valgrind("log_callbacks_do_not_leak") {
         return;
     }
-    annotate("modsecurity-rs: log_callbacks_do_not_leak");
+    annotate("libmodsecurity3-rs: log_callbacks_do_not_leak");
 
     let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let sink = std::sync::Arc::clone(&seen);
@@ -328,7 +342,7 @@ fn api_surface_raises_no_memcheck_errors() {
     if !under_valgrind("api_surface_raises_no_memcheck_errors") {
         return;
     }
-    annotate("modsecurity-rs: api_surface_raises_no_memcheck_errors");
+    annotate("libmodsecurity3-rs: api_surface_raises_no_memcheck_errors");
 
     let before = valgrind::count_errors();
 
@@ -346,9 +360,11 @@ fn api_surface_raises_no_memcheck_errors() {
     // pointer/length pairs, so Memcheck verifies libmodsecurity reads exactly
     // the bytes it was given and no further.
     let mut tx = Transaction::with_id(&ms, &rules, "memcheck-0001").unwrap();
-    tx.process_connection("203.0.113.9", 51234, "198.51.100.1", 443).unwrap();
+    tx.process_connection("203.0.113.9", 51234, "198.51.100.1", 443)
+        .unwrap();
     tx.process_uri("/page?a=1", "GET", "1.1").unwrap();
-    tx.add_request_header(b"X-Binary", &[0x00, 0xff, 0xc3, 0x28]).unwrap();
+    tx.add_request_header(b"X-Binary", &[0x00, 0xff, 0xc3, 0x28])
+        .unwrap();
     tx.add_request_header(b"X-Embedded\0Nul", b"value").unwrap();
     tx.add_request_header(b"", b"").unwrap();
     let action = tx.process_request_headers().unwrap().expect("redirect");
@@ -357,13 +373,23 @@ fn api_surface_raises_no_memcheck_errors() {
     drop(tx);
 
     // Error paths, which allocate and free diagnostics.
-    assert!(rules.add_plain("SecRule BOGUS \"@nope x\" \"id:2\"").is_err());
-    assert!(Rules::new().unwrap().add_plain("Sec\0RuleEngine On").is_err());
+    assert!(
+        rules
+            .add_plain("SecRule BOGUS \"@nope x\" \"id:2\"")
+            .is_err()
+    );
+    assert!(
+        Rules::new()
+            .unwrap()
+            .add_plain("Sec\0RuleEngine On")
+            .is_err()
+    );
 
     let after = valgrind::count_errors();
     println!("memcheck errors: {before} -> {after}");
     assert_eq!(
-        after, before,
+        after,
+        before,
         "Memcheck reported {} new error(s); see the Valgrind log above",
         after - before
     );

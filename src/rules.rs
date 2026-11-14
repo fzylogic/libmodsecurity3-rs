@@ -76,6 +76,24 @@ impl Rules {
 
     /// Loads rules from a file, returning the number of rules added.
     ///
+    /// The path is opened verbatim: it is not a glob, and no shell expansion
+    /// happens. Wildcards are a feature of SecLang's `Include` directive, not
+    /// of this entry point, so a whole directory is loaded by feeding the
+    /// directive in through [`add_plain`](Self::add_plain):
+    ///
+    /// ```no_run
+    /// # use modsecurity::Rules;
+    /// # fn main() -> modsecurity::Result<()> {
+    /// let mut rules = Rules::new()?;
+    /// rules.add_plain("Include /usr/share/modsecurity-crs/rules/*.conf\n")?;
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// Note also that libmodsecurity's parser implements `Include` but not
+    /// Apache's `IncludeOptional`, so a loader file written for
+    /// `mod_security2` — such as the `owasp-crs.load` Debian ships — is
+    /// rejected rather than loaded.
+    ///
     /// # Errors
     ///
     /// Returns [`Error::Rules`] with libmodsecurity's parser diagnostic if the

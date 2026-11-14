@@ -1,0 +1,172 @@
+name: CI
+
+# Tests run on every push to main and on every pull request. A release is never
+# automatic: it happens only when someone starts this workflow by hand from the
+# Actions tab and picks a version level, and even then only after all three
+# test jobs below have gone green on that same commit.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      level:
+        description: "Release level. 'none' runs the tests and stops there."
+        type: choice
+        default: none
+        options:
+          - none
+          - patch
+          - minor
+          - major
+          - rc
+          - beta
+          - alpha
+      dry_run:
+        description: "Rehearse the release: print what would happen, change nothing."
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Superseded pull-request runs are pointless; a release run is not something
+  # to cancel halfway through.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # tests/crs.rs reports a skip and passes where no Core Rule Set is installed.
+  # On CI a missing rule set is a broken runner, not a reason to pass.
+  MODSEC_REQUIRE_CRS: 1
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (stable)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup
+        with:
+          components: rustfmt clippy
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Clippy (all features)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Test
+        run: cargo test --all-targets
+
+      - name: Doc tests
+        run: cargo test --doc
+
+      - name: Build the docs the way docs.rs will
+        run: cargo doc --no-deps --no-default-features
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  msrv:
+    name: Build (MSRV 1.85)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Kept in step with `rust-version` in Cargo.toml. Default features only:
+      # the `valgrind` feature pulls in crabgrind and bindgen, whose own minimum
+      # versions are not this crate's to promise.
+      - uses: ./.github/actions/setup
+        with:
+          toolchain: "1.85"
+
+      - name: Check
+        run: cargo check --all-targets
+
+  valgrind:
+    name: Memcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup
+        with:
+          valgrind: "true"
+
+      # Runs every test binary under Memcheck and turns a definite or indirect
+      # leak, an invalid access, a double free or a read of uninitialised memory
+      # into exit 99. The script also sets MODSEC_REQUIRE_VALGRIND, so the
+      # in-process checks in tests/memcheck.rs cannot pass by skipping either.
+      - name: Run the suite under Valgrind
+        run: scripts/valgrind-test.sh
+
+  release:
+    name: Release
+    # The gate the request asks for: cargo-release runs only if all three test
+    # jobs succeeded. `needs` already implies that — a failed dependency skips
+    # this job — so there is no `always()` escape hatch here on purpose.
+    needs: [test, msrv, valgrind]
+    if: github.event_name == 'workflow_dispatch' && inputs.level != 'none'
+    runs-on: ubuntu-latest
+    permissions:
+      # cargo-release commits the version bump, tags it and pushes both.
+      contents: write
+    env:
+      # A semver requirement, not an exact release: `^0.25` is the line whose
+      # command-line surface this job is written against.
+      CARGO_RELEASE_VERSION: "^0.25"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # cargo-release inspects history to build the commit and tag, and
+          # needs the credentials left in place to push them back.
+          fetch-depth: 0
+          persist-credentials: true
+
+      - uses: ./.github/actions/setup
+
+      - name: Cache cargo-release
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-release
+          key: cargo-release-${{ env.CARGO_RELEASE_VERSION }}-${{ runner.os }}
+
+      - name: Install cargo-release
+        run: |
+          set -euo pipefail
+          if [[ -x "$HOME/.cargo/bin/cargo-release" ]]; then
+            echo "restored from cache: $(cargo release --version)"
+          else
+            cargo install cargo-release --locked --version "$CARGO_RELEASE_VERSION"
+          fi
+
+      - name: Identify the committer
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Run cargo-release
+        env:
+          # Required to publish. Without it `cargo release` fails at the publish
+          # step, after the commit and tag have already been made — set the
+          # secret, or set `publish = false` in release.toml.
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          LEVEL: ${{ inputs.level }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          # cargo-release is a dry run unless told otherwise; --execute is what
+          # makes it write, tag, push and publish.
+          if [[ "$DRY_RUN" == "true" ]]; then
+            cargo release "$LEVEL"
+          else
+            cargo release "$LEVEL" --execute --no-confirm
+          fi
