@@ -1,0 +1,60 @@
+# Valgrind suppressions for PCRE2's JIT — applied ONLY to the CRS test binary.
+#
+# Kept out of valgrind.supp, and switched on per-binary by
+# scripts/valgrind-runner.sh, because the single entry below is unavoidably
+# broad: it can only match on unsymbolised frames, so it would also hide a real
+# 16-byte invalid read in libmodsecurity or in this crate. Confining it to
+# tests/crs.rs keeps every other test binary checked at full strength.
+#
+# What it hides, and why that is not a bug:
+#
+#   ==…== Invalid read of size 16
+#   ==…==    at 0x8D28FBD: ???
+#   ==…==    by 0xB461E7F: ???
+#   ==…==  Address 0xb461e8f is 15 bytes inside a block of size 27 alloc'd
+#   ==…==    at 0x4846FA3: operator new(unsigned long)
+#   ==…==    by 0x51DB85A: std::__cxx11::basic_string<…>::_M_construct<char*>
+#   ==…==    by 0x4974433: modsecurity::RuleWithActions::executeTransformations
+#
+# libmodsecurity links libpcre2-8, whose JIT-compiled matchers scan subjects
+# with unaligned 16-byte vector loads. A load may start inside the subject
+# string and run past its end — never across a page boundary, so it cannot
+# fault, but Memcheck sees the tail bytes as unaddressable. Both frames are
+# JIT-generated code with no symbols or unwind information, which is why the
+# stack is two anonymous frames deep.
+#
+# This is a known PCRE2 property, not a defect in the subject string's owner:
+# upstream's remedy is to build PCRE2 with --enable-valgrind, which teaches the
+# JIT to mark those reads. The distribution's libpcre2-8 is not built that way,
+# and nothing in this crate chooses whether the JIT is used — libmodsecurity
+# enables it at build time. The errors appear only here because the CRS drives
+# far more, and far more complex, regexes than the hand-written rules in the
+# other tests do.
+#
+# --partial-loads-ok, which would cover exactly this case, does not help: it
+# applies only to *naturally aligned* vector loads, and these are not aligned.
+#
+# If PCRE2 is ever rebuilt with Valgrind support, delete this file and the
+# branch in scripts/valgrind-runner.sh that reaches for it.
+{
+   pcre2-jit-unaligned-subject-overread
+   Memcheck:Addr16
+   obj:*
+   obj:*
+}
+
+# The same vector loads, one step later. Having read past the end of the
+# subject, the JIT compares the whole 16-byte register against the pattern and
+# discards the lanes beyond the string, so the branch itself is taken on bytes
+# Memcheck has marked undefined. The stack is the same pair of anonymous
+# JIT frames:
+#
+#   ==…== Conditional jump or move depends on uninitialised value(s)
+#   ==…==    at 0x9136A76: ???
+#   ==…==    by 0x8921B0F: ???
+{
+   pcre2-jit-branch-on-overread-tail
+   Memcheck:Cond
+   obj:*
+   obj:*
+}

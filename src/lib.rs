@@ -117,16 +117,26 @@
     clippy::must_use_candidate
 )]
 
+// The `valgrind` feature exists to carry crabgrind to `tests/memcheck.rs`, and
+// nothing in the library itself calls it. Cargo forbids optional
+// dev-dependencies ("dev-dependencies are not allowed to be optional"), so a
+// feature-gated test dependency has nowhere to live but `[dependencies]` —
+// where cargo's `unused_dependencies` lint then, quite correctly, notices that
+// the library never touches it. This import is the acknowledgement: it costs
+// nothing, binds no name, and says the dependency is deliberate.
+#[cfg(feature = "valgrind")]
+use crabgrind as _;
+
 pub mod ffi;
 
 mod error;
 mod intervention;
-mod modsecurity;
+mod modsecurity3;
 mod rules;
 mod transaction;
 
 pub use crate::error::{Error, Result};
 pub use crate::intervention::Intervention;
-pub use crate::modsecurity::{LogCallback, ModSecurity};
+pub use crate::modsecurity3::{LogCallback, ModSecurity};
 pub use crate::rules::Rules;
 pub use crate::transaction::Transaction;

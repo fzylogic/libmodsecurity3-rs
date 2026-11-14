@@ -9,7 +9,7 @@ use std::ptr::NonNull;
 use crate::error::{Error, Result, cpath, cstring};
 use crate::ffi;
 use crate::intervention::Intervention;
-use crate::modsecurity::ModSecurity;
+use crate::modsecurity3::ModSecurity;
 use crate::rules::Rules;
 
 /// A single HTTP transaction under inspection.
