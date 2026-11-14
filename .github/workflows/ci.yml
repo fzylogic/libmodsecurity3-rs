@@ -48,7 +48,7 @@ jobs:
     name: Test (stable)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/setup
         with:
@@ -78,7 +78,7 @@ jobs:
     name: Build (MSRV 1.85)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Kept in step with `rust-version` in Cargo.toml. Default features only:
       # the `valgrind` feature pulls in crabgrind and bindgen, whose own minimum
@@ -94,7 +94,7 @@ jobs:
     name: Memcheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/setup
         with:
@@ -123,7 +123,7 @@ jobs:
       # command-line surface this job is written against.
       CARGO_RELEASE_VERSION: "^0.25"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # cargo-release inspects history to build the commit and tag, and
           # needs the credentials left in place to push them back.
@@ -133,7 +133,7 @@ jobs:
       - uses: ./.github/actions/setup
 
       - name: Cache cargo-release
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/cargo-release
           key: cargo-release-${{ env.CARGO_RELEASE_VERSION }}-${{ runner.os }}
