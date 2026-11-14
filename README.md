@@ -271,49 +271,6 @@ instead of eight.
 
 [crabgrind]: https://github.com/2dav/crabgrind
 
-## Continuous integration and releasing
-
-`.github/workflows/ci.yml` runs three test jobs on every push to `main` and
-every pull request:
-
-| Job | What it does |
-| --- | --- |
-| **Test (stable)** | `cargo fmt --check`, clippy with and without `--all-features` (both `-D warnings`), `cargo test --all-targets`, the doc tests, and a `cargo doc` build with the flags docs.rs will use |
-| **Build (MSRV 1.85)** | `cargo check --all-targets` on the toolchain `rust-version` promises |
-| **Memcheck** | `scripts/valgrind-test.sh` — every test binary under Valgrind |
-
-System dependencies come from apt (`libmodsecurity-dev`, `modsecurity-crs`,
-and Valgrind plus `libclang-dev` for the Memcheck job) and the toolchain from
-the rustup already on the runner, so the pipeline uses no third-party actions.
-`MODSEC_REQUIRE_CRS=1` is set for the whole workflow and the setup step checks
-for the CRS files directly: a runner without the rule set fails the build
-rather than quietly skipping `tests/crs.rs`.
-
-### Cutting a release
-
-Releases are never automatic. Start the **CI** workflow by hand from the
-Actions tab and choose a level — `patch`, `minor`, `major`, `rc`, `beta` or
-`alpha`. The `release` job `needs` all three test jobs, so cargo-release runs
-only on a commit that has just gone green; leaving the level at `none` runs the
-tests and stops. Tick **dry_run** to have cargo-release print what it would do
-and change nothing.
-
-What a real run does is set out in `release.toml`: bump the version, commit,
-tag `v{version}`, push both, and publish to crates.io. Before the first one:
-
-- Add a **`CARGO_REGISTRY_TOKEN`** repository secret, or set `publish = false`
-  in `release.toml` to tag without publishing. Without it cargo-release fails
-  at the publish step, *after* the commit and tag have been made.
-- Give Actions write access to the repository (Settings → Actions → General →
-  Workflow permissions), since the job pushes a commit and a tag.
-- If `main` is protected, allow the `github-actions[bot]` push or the release
-  will be rejected at the last step.
-- `allow-branch = ["main"]` means a dispatch from any other branch is refused
-  up front, before anything is written.
-
-To require a human approval before publishing, add an `environment:` to the
-`release` job and configure required reviewers on it.
-
 ## License
 
 Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
